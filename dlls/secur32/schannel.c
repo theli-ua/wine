@@ -59,6 +59,8 @@ struct schan_context
     schan_imp_session session;
     ULONG req_ctx_attr;
     const CERT_CONTEXT *cert;
+    struct schan_transport *push_transport;
+    struct schan_transport *pull_transport;
 };
 
 static struct schan_handle *schan_handle_table;
@@ -895,7 +897,7 @@ static SECURITY_STATUS SEC_ENTRY schan_InitializeSecurityContextW(
     init_schan_buffers(&transport.in, pInput, schan_init_sec_ctx_get_next_input_buffer);
     transport.in.limit = expected_size;
     init_schan_buffers(&transport.out, pOutput, schan_init_sec_ctx_get_next_output_buffer);
-    schan_imp_set_session_transport(ctx->session, &transport);
+    schan_imp_set_session_transports(ctx->session, &transport, &transport);
 
     /* Perform the TLS handshake */
     ret = schan_imp_handshake(ctx->session);
@@ -926,6 +928,13 @@ static SECURITY_STATUS SEC_ENTRY schan_InitializeSecurityContextW(
         *pfContextAttr |= ISC_RET_ALLOCATED_MEMORY;
     if (ctx->req_ctx_attr & ISC_REQ_STREAM)
         *pfContextAttr |= ISC_RET_STREAM;
+
+    ctx->push_transport = HeapAlloc(GetProcessHeap(), 0, sizeof(struct schan_transport));
+    ctx->push_transport->ctx = ctx;
+    ctx->pull_transport = HeapAlloc(GetProcessHeap(), 0, sizeof(struct schan_transport));
+    ctx->pull_transport->ctx = ctx;
+    schan_imp_set_session_transports(ctx->session, ctx->push_transport,
+            ctx->pull_transport);
 
     return ret;
 }
@@ -1205,7 +1214,6 @@ static int schan_encrypt_message_get_next_buffer_token(const struct schan_transp
 static SECURITY_STATUS SEC_ENTRY schan_EncryptMessage(PCtxtHandle context_handle,
         ULONG quality, PSecBufferDesc message, ULONG message_seq_no)
 {
-    struct schan_transport transport;
     struct schan_context *ctx;
     struct schan_buffers *b;
     SECURITY_STATUS status;
@@ -1235,13 +1243,11 @@ static SECURITY_STATUS SEC_ENTRY schan_EncryptMessage(PCtxtHandle context_handle
     data = HeapAlloc(GetProcessHeap(), 0, data_size);
     memcpy(data, buffer->pvBuffer, data_size);
 
-    transport.ctx = ctx;
-    init_schan_buffers(&transport.in, NULL, NULL);
+    init_schan_buffers(&ctx->push_transport->in, NULL, NULL);
     if (schan_find_sec_buffer_idx(message, 0, SECBUFFER_STREAM_HEADER) != -1)
-        init_schan_buffers(&transport.out, message, schan_encrypt_message_get_next_buffer);
+        init_schan_buffers(&ctx->push_transport->out, message, schan_encrypt_message_get_next_buffer);
     else
-        init_schan_buffers(&transport.out, message, schan_encrypt_message_get_next_buffer_token);
-    schan_imp_set_session_transport(ctx->session, &transport);
+        init_schan_buffers(&ctx->push_transport->out, message, schan_encrypt_message_get_next_buffer_token);
 
     length = data_size;
     status = schan_imp_send(ctx->session, data, &length);
@@ -1251,7 +1257,7 @@ static SECURITY_STATUS SEC_ENTRY schan_EncryptMessage(PCtxtHandle context_handle
     if (length != data_size)
         status = SEC_E_INTERNAL_ERROR;
 
-    b = &transport.out;
+    b = &ctx->push_transport->out;
     b->desc->pBuffers[b->current_buffer_idx].cbBuffer = b->offset;
     HeapFree(GetProcessHeap(), 0, data);
 
@@ -1327,7 +1333,6 @@ static void schan_decrypt_fill_buffer(PSecBufferDesc message, ULONG buffer_type,
 static SECURITY_STATUS SEC_ENTRY schan_DecryptMessage(PCtxtHandle context_handle,
         PSecBufferDesc message, ULONG message_seq_no, PULONG quality)
 {
-    struct schan_transport transport;
     struct schan_context *ctx;
     SecBuffer *buffer;
     SIZE_T data_size;
@@ -1371,11 +1376,9 @@ static SECURITY_STATUS SEC_ENTRY schan_DecryptMessage(PCtxtHandle context_handle
     data_size = expected_size - 5;
     data = HeapAlloc(GetProcessHeap(), 0, data_size);
 
-    transport.ctx = ctx;
-    init_schan_buffers(&transport.in, message, schan_decrypt_message_get_next_buffer);
-    transport.in.limit = expected_size;
-    init_schan_buffers(&transport.out, NULL, NULL);
-    schan_imp_set_session_transport(ctx->session, &transport);
+    init_schan_buffers(&ctx->pull_transport->in, message, schan_decrypt_message_get_next_buffer);
+    ctx->pull_transport->in.limit = expected_size;
+    init_schan_buffers(&ctx->pull_transport->out, NULL, NULL);
 
     while (received < data_size)
     {
@@ -1573,6 +1576,8 @@ void SECUR32_deinitSchannelSP(void)
         {
             struct schan_context *ctx = schan_free_handle(i, SCHAN_HANDLE_CTX);
             schan_imp_dispose_session(ctx->session);
+            HeapFree(GetProcessHeap(), 0, ctx->push_transport);
+            HeapFree(GetProcessHeap(), 0, ctx->pull_transport);
             HeapFree(GetProcessHeap(), 0, ctx);
         }
     }

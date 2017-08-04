@@ -73,7 +73,7 @@ MAKE_FUNCPTR(gnutls_record_send);
 MAKE_FUNCPTR(gnutls_server_name_set);
 MAKE_FUNCPTR(gnutls_transport_get_ptr);
 MAKE_FUNCPTR(gnutls_transport_set_errno);
-MAKE_FUNCPTR(gnutls_transport_set_ptr);
+MAKE_FUNCPTR(gnutls_transport_set_ptr2);
 MAKE_FUNCPTR(gnutls_transport_set_pull_function);
 MAKE_FUNCPTR(gnutls_transport_set_push_function);
 #undef MAKE_FUNCPTR
@@ -214,11 +214,13 @@ void schan_imp_dispose_session(schan_imp_session session)
     pgnutls_deinit(s);
 }
 
-void schan_imp_set_session_transport(schan_imp_session session,
-                                     struct schan_transport *t)
+void schan_imp_set_session_transports(schan_imp_session session,
+                                     struct schan_transport *t_push,
+                                     struct schan_transport *t_pull)
 {
     gnutls_session_t s = (gnutls_session_t)session;
-    pgnutls_transport_set_ptr(s, (gnutls_transport_ptr_t)t);
+    pgnutls_transport_set_ptr2(s, (gnutls_transport_ptr_t)t_pull, 
+            (gnutls_transport_ptr_t)t_push);
 }
 
 void schan_imp_set_session_target(schan_imp_session session, const char *target)
@@ -568,7 +570,7 @@ BOOL schan_imp_init(void)
     LOAD_FUNCPTR(gnutls_server_name_set)
     LOAD_FUNCPTR(gnutls_transport_get_ptr)
     LOAD_FUNCPTR(gnutls_transport_set_errno)
-    LOAD_FUNCPTR(gnutls_transport_set_ptr)
+    LOAD_FUNCPTR(gnutls_transport_set_ptr2)
     LOAD_FUNCPTR(gnutls_transport_set_pull_function)
     LOAD_FUNCPTR(gnutls_transport_set_push_function)
 #undef LOAD_FUNCPTR
