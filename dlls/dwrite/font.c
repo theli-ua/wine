@@ -1380,7 +1380,6 @@ static HRESULT get_fontface_from_font(struct dwrite_font *font, IDWriteFontFace4
     hr = factory_get_cached_fontface(font->family->collection->factory, &data->file, data->face_index,
         font->data->simulations, (IDWriteFontFace **)fontface, &cached_list);
     if (hr == S_OK) {
-        IDWriteFontFace4_AddRef(*fontface);
         return hr;
     }
 

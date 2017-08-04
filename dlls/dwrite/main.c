@@ -822,7 +822,7 @@ HRESULT factory_get_cached_fontface(IDWriteFactory5 *iface, IDWriteFontFile * co
     UINT32 index, DWRITE_FONT_SIMULATIONS simulations, IDWriteFontFace **font_face, struct list **cached_list)
 {
     struct dwritefactory *factory = impl_from_IDWriteFactory5(iface);
-    struct fontfacecached *cached;
+    struct fontfacecached *cached, *cached2;
     IDWriteFontFileLoader *loader;
     struct list *fontfaces;
     UINT32 key_size;
@@ -855,33 +855,48 @@ HRESULT factory_get_cached_fontface(IDWriteFactory5 *iface, IDWriteFontFile * co
     *cached_list = fontfaces;
 
     /* search through cache list */
-    LIST_FOR_EACH_ENTRY(cached, fontfaces, struct fontfacecached, entry) {
+    LIST_FOR_EACH_ENTRY_SAFE(cached, cached2, fontfaces, struct fontfacecached, entry) {
         UINT32 cached_key_size, count = 1, cached_face_index;
         DWRITE_FONT_SIMULATIONS cached_simulations;
         const void *cached_key;
         IDWriteFontFile *file;
 
+        if (IDWriteFontFace_AddRef((IDWriteFontFace*)cached->fontface) <=1) {
+            TRACE("STOLEN\n");
+            /* It was stolen right underneath us,
+             * at this point its already being released so we shouldn't
+             * try and Release it from here */
+            continue;
+        }
+
         cached_face_index = IDWriteFontFace4_GetIndex(cached->fontface);
         cached_simulations = IDWriteFontFace4_GetSimulations(cached->fontface);
 
         /* skip earlier */
-        if (cached_face_index != index || cached_simulations != simulations)
+        if (cached_face_index != index || cached_simulations != simulations) {
+            IDWriteFontFace_Release((IDWriteFontFace*)cached->fontface);
             continue;
+        }
 
         hr = IDWriteFontFace4_GetFiles(cached->fontface, &count, &file);
-        if (FAILED(hr))
+        if (FAILED(hr)) {
+            IDWriteFontFace_Release((IDWriteFontFace*)cached->fontface);
             return hr;
+        }
 
         hr = IDWriteFontFile_GetReferenceKey(file, &cached_key, &cached_key_size);
         IDWriteFontFile_Release(file);
-        if (FAILED(hr))
+        if (FAILED(hr)) {
+            IDWriteFontFace_Release((IDWriteFontFace*)cached->fontface);
             return hr;
+        }
 
         if (cached_key_size == key_size && !memcmp(cached_key, key, key_size)) {
             TRACE("returning cached fontface %p\n", cached->fontface);
             *font_face = (IDWriteFontFace*)cached->fontface;
             return S_OK;
         }
+        IDWriteFontFace_Release((IDWriteFontFace*)cached->fontface);
     }
 
     return S_FALSE;
@@ -949,8 +964,6 @@ static HRESULT WINAPI dwritefactory_CreateFontFace(IDWriteFactory5 *iface, DWRIT
         return DWRITE_E_FILEFORMAT;
 
     hr = factory_get_cached_fontface(iface, font_files, index, simulations, fontface, &fontfaces);
-    if (hr == S_OK)
-        IDWriteFontFace_AddRef(*fontface);
 
     if (hr != S_FALSE)
         return hr;
